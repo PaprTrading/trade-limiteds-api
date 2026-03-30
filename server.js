@@ -14,7 +14,6 @@ app.get("/inventory/:userId", async (req, res) => {
 	if (!userId || isNaN(userId)) return res.status(400).json({ error: "Invalid userId" });
 
 	try {
-		// Step 1: Get all collectibles (limiteds) from inventory
 		let allItems = [];
 		let cursor = null;
 
@@ -24,11 +23,9 @@ app.get("/inventory/:userId", async (req, res) => {
 				: `https://inventory.roblox.com/v1/users/${userId}/assets/collectibles?sortOrder=Asc&limit=100`;
 
 			const response = await fetch(url, { headers: { "Accept": "application/json" } });
-
 			if (!response.ok) {
 				return res.status(200).json({ userId, limitedCount: 0, rap: 0, private: true, items: [] });
 			}
-
 			const data = await response.json();
 			allItems = allItems.concat(data.data || []);
 			cursor = data.nextPageCursor;
@@ -44,61 +41,62 @@ app.get("/inventory/:userId", async (req, res) => {
 			const thumbnails = {};
 			const saleStatus = {};
 
-			// Step 2: Batch fetch thumbnails
+			// Batch thumbnails
 			for (let i = 0; i < assetIds.length; i += 100) {
 				const batch = assetIds.slice(i, i + 100).join(",");
 				try {
-					const thumbRes = await fetch(
+					const r = await fetch(
 						`https://thumbnails.roblox.com/v1/assets?assetIds=${batch}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false`,
 						{ headers: { "Accept": "application/json" } }
 					);
-					if (thumbRes.ok) {
-						const thumbData = await thumbRes.json();
-						for (const t of (thumbData.data || [])) {
-							thumbnails[t.targetId] = t.imageUrl;
+					if (r.ok) {
+						const d = await r.json();
+						for (const t of (d.data || [])) thumbnails[t.targetId] = t.imageUrl;
+					}
+				} catch (e) {}
+			}
+
+			// Fetch sale status via catalog/items/details POST
+			for (let i = 0; i < assetIds.length; i += 120) {
+				const batch = assetIds.slice(i, i + 120);
+				try {
+					const r = await fetch("https://catalog.roblox.com/v1/catalog/items/details", {
+						method: "POST",
+						headers: { "Content-Type": "application/json", "Accept": "application/json" },
+						body: JSON.stringify({
+							items: batch.map(id => ({ itemType: "Asset", id: Number(id) }))
+						})
+					});
+					if (r.ok) {
+						const d = await r.json();
+						for (const asset of (d.data || [])) {
+							const statusArr = asset.itemStatus || [];
+							const priceStatus = asset.priceStatus || "";
+							const isOffsale =
+								statusArr.includes("Offsale") ||
+								priceStatus === "Off Sale" ||
+								priceStatus === "No Resellers" ||
+								(!asset.price && !asset.lowestPrice && !asset.unitsAvailableForConsumption);
+
+							saleStatus[asset.id] = {
+								isOffsale,
+								originalPrice: asset.price || asset.lowestPrice || 0,
+								description: asset.description || "",
+							};
 						}
 					}
 				} catch (e) {}
 			}
 
-			// Step 3: Batch fetch asset sale details using economy API
-			// This returns priceStatus which is the most reliable offsale indicator
-			for (let i = 0; i < assetIds.length; i += 100) {
-				const batch = assetIds.slice(i, i + 100);
-				try {
-					// Fetch each asset's economy data
-					const promises = batch.map(id =>
-						fetch(`https://economy.roblox.com/v2/assets/${id}/details`, {
-							headers: { "Accept": "application/json" }
-						}).then(r => r.ok ? r.json() : null).catch(() => null)
-					);
-					const results = await Promise.all(promises);
-					for (const asset of results) {
-						if (!asset) continue;
-						// priceStatus "Off Sale" or "No Resellers" means offsale
-						// isForSale false and price is null means offsale
-						const isOffsale =
-							asset.PriceStatus === "Off Sale" ||
-							asset.priceStatus === "Off Sale" ||
-							(!asset.IsForSale && !asset.isForSale && asset.PriceInRobux === null && asset.priceInRobux === null) ||
-							asset.Sales === 0 && !asset.IsForSale;
-
-						saleStatus[asset.AssetId || asset.assetId] = {
-							isOffsale: isOffsale,
-							originalPrice: asset.PriceInRobux || asset.priceInRobux || 0,
-						};
-					}
-				} catch (e) {}
-			}
-
 			const itemDetails = allItems.map(item => {
-				const status = saleStatus[item.assetId] || {};
+				const s = saleStatus[item.assetId] || {};
 				return {
 					assetId: item.assetId,
 					name: item.name,
 					rap: item.recentAveragePrice || 0,
-					originalPrice: status.originalPrice || 0,
-					isOffsale: status.isOffsale || false,
+					originalPrice: s.originalPrice || 0,
+					isOffsale: s.isOffsale || false,
+					description: s.description || "",
 					serialNumber: item.serialNumber || null,
 					imageUrl: thumbnails[item.assetId] || ""
 				};
@@ -116,16 +114,76 @@ app.get("/inventory/:userId", async (req, res) => {
 });
 
 // ============================================================
+// GET /itemdetails/:assetId
+// Full item info + RAP price history chart
+// ============================================================
+
+app.get("/itemdetails/:assetId", async (req, res) => {
+	const assetId = req.params.assetId;
+	if (!assetId || isNaN(assetId)) return res.status(400).json({ error: "Invalid assetId" });
+
+	try {
+		const [detailsRes, rapRes, thumbRes] = await Promise.all([
+			fetch("https://catalog.roblox.com/v1/catalog/items/details", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "Accept": "application/json" },
+				body: JSON.stringify({ items: [{ itemType: "Asset", id: Number(assetId) }] })
+			}),
+			fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`, {
+				headers: { "Accept": "application/json" }
+			}),
+			fetch(`https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`, {
+				headers: { "Accept": "application/json" }
+			})
+		]);
+
+		let details = {};
+		let rapHistory = [];
+		let imageUrl = "";
+
+		if (detailsRes.ok) {
+			const d = await detailsRes.json();
+			const asset = (d.data || [])[0] || {};
+			details = {
+				name: asset.name || "",
+				description: asset.description || "",
+				originalPrice: asset.price || asset.lowestPrice || 0,
+				rap: asset.recentAveragePrice || 0,
+				isOffsale: (asset.itemStatus || []).includes("Offsale") || asset.priceStatus === "Off Sale",
+				creator: asset.creatorName || "Roblox",
+			};
+		}
+
+		if (rapRes.ok) {
+			const r = await rapRes.json();
+			rapHistory = (r.priceDataPoints || []).map(p => ({
+				price: p.value,
+				date: p.date
+			}));
+		}
+
+		if (thumbRes.ok) {
+			const t = await thumbRes.json();
+			imageUrl = ((t.data || [])[0] || {}).imageUrl || "";
+		}
+
+		return res.status(200).json({ assetId, details, rapHistory, imageUrl });
+
+	} catch (err) {
+		console.error("Item details error:", err);
+		return res.status(500).json({ error: "Failed to fetch item details" });
+	}
+});
+
+// ============================================================
 // GET /batch?userIds=123,456
 // ============================================================
 
 app.get("/batch", async (req, res) => {
 	const raw = req.query.userIds;
 	if (!raw) return res.status(400).json({ error: "No userIds" });
-
 	const userIds = raw.split(",").map(id => id.trim()).filter(id => !isNaN(id));
 	const results = [];
-
 	for (const userId of userIds) {
 		try {
 			const response = await fetch(
@@ -142,32 +200,24 @@ app.get("/batch", async (req, res) => {
 			results.push({ userId, limitedCount: 0, rap: 0, private: true });
 		}
 	}
-
 	return res.status(200).json({ results });
 });
 
 // ============================================================
 // GET /headshots?userIds=123,456
-// Returns avatar headshot URLs for a list of userIds
 // ============================================================
 
 app.get("/headshots", async (req, res) => {
 	const raw = req.query.userIds;
 	if (!raw) return res.status(400).json({ error: "No userIds" });
-
 	const userIds = raw.split(",").map(id => id.trim()).filter(id => !isNaN(id));
-	if (userIds.length === 0) return res.status(400).json({ error: "Invalid userIds" });
-
 	try {
 		const url = `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userIds.join(",")}&size=150x150&format=Png&isCircular=false`;
 		const response = await fetch(url, { headers: { "Accept": "application/json" } });
-
 		if (!response.ok) return res.status(200).json({ data: [] });
-
 		const data = await response.json();
 		return res.status(200).json({ data: data.data || [] });
 	} catch (err) {
-		console.error("Headshot error:", err);
 		return res.status(500).json({ error: "Failed to fetch headshots" });
 	}
 });
