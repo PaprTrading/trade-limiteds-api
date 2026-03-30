@@ -160,6 +160,9 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 				price: p.value,
 				date: p.date
 			}));
+			if (r.originalPrice && !details.originalPrice) {
+				details.originalPrice = r.originalPrice;
+			}
 		}
 
 		if (thumbRes.ok) {
