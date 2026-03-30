@@ -110,6 +110,32 @@ app.get("/batch", async (req, res) => {
 	return res.status(200).json({ results });
 });
 
+// ============================================================
+// GET /headshots?userIds=123,456
+// Returns avatar headshot URLs for a list of userIds
+// ============================================================
+
+app.get("/headshots", async (req, res) => {
+	const raw = req.query.userIds;
+	if (!raw) return res.status(400).json({ error: "No userIds" });
+
+	const userIds = raw.split(",").map(id => id.trim()).filter(id => !isNaN(id));
+	if (userIds.length === 0) return res.status(400).json({ error: "Invalid userIds" });
+
+	try {
+		const url = `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userIds.join(",")}&size=150x150&format=Png&isCircular=false`;
+		const response = await fetch(url, { headers: { "Accept": "application/json" } });
+
+		if (!response.ok) return res.status(200).json({ data: [] });
+
+		const data = await response.json();
+		return res.status(200).json({ data: data.data || [] });
+	} catch (err) {
+		console.error("Headshot error:", err);
+		return res.status(500).json({ error: "Failed to fetch headshots" });
+	}
+});
+
 app.get("/", (req, res) => res.send("Trade Limiteds API is running."));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
