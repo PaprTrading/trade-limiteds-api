@@ -66,15 +66,24 @@ app.get("/inventory/:userId", async (req, res) => {
 				const batch = assetIds.slice(i, i + 120).join(",");
 				try {
 					const catRes = await fetch(
-						`https://economy.roblox.com/v2/assets?assetIds=${batch}`,
-						{ headers: { "Accept": "application/json" } }
+						`https://catalog.roblox.com/v1/catalog/items/details`,
+						{
+							method: "POST",
+							headers: { "Accept": "application/json", "Content-Type": "application/json" },
+							body: JSON.stringify({
+								items: batch.split(",").map(id => ({ itemType: "Asset", id: parseInt(id) }))
+							})
+						}
 					);
 					if (catRes.ok) {
 						const catData = await catRes.json();
 						for (const asset of (catData.data || [])) {
+							// An item is offsale if it has no price and is not for sale
+							const isOffsale = !asset.price && !asset.lowestPrice && asset.itemStatus && asset.itemStatus.includes("Offsale");
+							const wasOffsale = asset.priceStatus === "Off Sale" || asset.itemStatus?.includes("Offsale");
 							catalogData[asset.id] = {
-								originalPrice: asset.price || 0,
-								isForSale: asset.isForSale || false,
+								originalPrice: asset.price || asset.lowestPrice || 0,
+								isOffsale: wasOffsale || isOffsale,
 							};
 						}
 					}
@@ -83,13 +92,12 @@ app.get("/inventory/:userId", async (req, res) => {
 
 			const itemDetails = allItems.map(item => {
 				const cat = catalogData[item.assetId] || {};
-				const isOffsale = !cat.isForSale;
 				return {
 					assetId: item.assetId,
 					name: item.name,
 					rap: item.recentAveragePrice || 0,
 					originalPrice: cat.originalPrice || 0,
-					isOffsale: isOffsale,
+					isOffsale: cat.isOffsale || false,
 					serialNumber: item.serialNumber || null,
 					imageUrl: thumbnails[item.assetId] || ""
 				};
