@@ -14,6 +14,7 @@ app.get("/inventory/:userId", async (req, res) => {
 	if (!userId || isNaN(userId)) return res.status(400).json({ error: "Invalid userId" });
 
 	try {
+		// Step 1: Get all collectibles (limiteds) from inventory
 		let allItems = [];
 		let cursor = null;
 
@@ -39,12 +40,11 @@ app.get("/inventory/:userId", async (req, res) => {
 		}
 
 		if (full) {
-			// Fetch thumbnails for all items
 			const assetIds = allItems.map(i => i.assetId).filter(Boolean);
 			const thumbnails = {};
-			const catalogData = {};
+			const saleStatus = {};
 
-			// Batch thumbnails in groups of 100
+			// Step 2: Batch fetch thumbnails
 			for (let i = 0; i < assetIds.length; i += 100) {
 				const batch = assetIds.slice(i, i + 100).join(",");
 				try {
@@ -61,43 +61,44 @@ app.get("/inventory/:userId", async (req, res) => {
 				} catch (e) {}
 			}
 
-			// Batch catalog details in groups of 120 to get original price + onsale status
-			for (let i = 0; i < assetIds.length; i += 120) {
-				const batch = assetIds.slice(i, i + 120).join(",");
+			// Step 3: Batch fetch asset sale details using economy API
+			// This returns priceStatus which is the most reliable offsale indicator
+			for (let i = 0; i < assetIds.length; i += 100) {
+				const batch = assetIds.slice(i, i + 100);
 				try {
-					const catRes = await fetch(
-						`https://catalog.roblox.com/v1/catalog/items/details`,
-						{
-							method: "POST",
-							headers: { "Accept": "application/json", "Content-Type": "application/json" },
-							body: JSON.stringify({
-								items: batch.split(",").map(id => ({ itemType: "Asset", id: parseInt(id) }))
-							})
-						}
+					// Fetch each asset's economy data
+					const promises = batch.map(id =>
+						fetch(`https://economy.roblox.com/v2/assets/${id}/details`, {
+							headers: { "Accept": "application/json" }
+						}).then(r => r.ok ? r.json() : null).catch(() => null)
 					);
-					if (catRes.ok) {
-						const catData = await catRes.json();
-						for (const asset of (catData.data || [])) {
-							// An item is offsale if it has no price and is not for sale
-							const isOffsale = !asset.price && !asset.lowestPrice && asset.itemStatus && asset.itemStatus.includes("Offsale");
-							const wasOffsale = asset.priceStatus === "Off Sale" || asset.itemStatus?.includes("Offsale");
-							catalogData[asset.id] = {
-								originalPrice: asset.price || asset.lowestPrice || 0,
-								isOffsale: wasOffsale || isOffsale,
-							};
-						}
+					const results = await Promise.all(promises);
+					for (const asset of results) {
+						if (!asset) continue;
+						// priceStatus "Off Sale" or "No Resellers" means offsale
+						// isForSale false and price is null means offsale
+						const isOffsale =
+							asset.PriceStatus === "Off Sale" ||
+							asset.priceStatus === "Off Sale" ||
+							(!asset.IsForSale && !asset.isForSale && asset.PriceInRobux === null && asset.priceInRobux === null) ||
+							asset.Sales === 0 && !asset.IsForSale;
+
+						saleStatus[asset.AssetId || asset.assetId] = {
+							isOffsale: isOffsale,
+							originalPrice: asset.PriceInRobux || asset.priceInRobux || 0,
+						};
 					}
 				} catch (e) {}
 			}
 
 			const itemDetails = allItems.map(item => {
-				const cat = catalogData[item.assetId] || {};
+				const status = saleStatus[item.assetId] || {};
 				return {
 					assetId: item.assetId,
 					name: item.name,
 					rap: item.recentAveragePrice || 0,
-					originalPrice: cat.originalPrice || 0,
-					isOffsale: cat.isOffsale || false,
+					originalPrice: status.originalPrice || 0,
+					isOffsale: status.isOffsale || false,
 					serialNumber: item.serialNumber || null,
 					imageUrl: thumbnails[item.assetId] || ""
 				};
