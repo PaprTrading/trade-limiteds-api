@@ -42,8 +42,9 @@ app.get("/inventory/:userId", async (req, res) => {
 			// Fetch thumbnails for all items
 			const assetIds = allItems.map(i => i.assetId).filter(Boolean);
 			const thumbnails = {};
+			const catalogData = {};
 
-			// Batch in groups of 100
+			// Batch thumbnails in groups of 100
 			for (let i = 0; i < assetIds.length; i += 100) {
 				const batch = assetIds.slice(i, i + 100).join(",");
 				try {
@@ -60,13 +61,39 @@ app.get("/inventory/:userId", async (req, res) => {
 				} catch (e) {}
 			}
 
-			const itemDetails = allItems.map(item => ({
-				assetId: item.assetId,
-				name: item.name,
-				rap: item.recentAveragePrice || 0,
-				serialNumber: item.serialNumber || null,
-				imageUrl: thumbnails[item.assetId] || ""
-			}));
+			// Batch catalog details in groups of 120 to get original price + onsale status
+			for (let i = 0; i < assetIds.length; i += 120) {
+				const batch = assetIds.slice(i, i + 120).join(",");
+				try {
+					const catRes = await fetch(
+						`https://economy.roblox.com/v2/assets?assetIds=${batch}`,
+						{ headers: { "Accept": "application/json" } }
+					);
+					if (catRes.ok) {
+						const catData = await catRes.json();
+						for (const asset of (catData.data || [])) {
+							catalogData[asset.id] = {
+								originalPrice: asset.price || 0,
+								isForSale: asset.isForSale || false,
+							};
+						}
+					}
+				} catch (e) {}
+			}
+
+			const itemDetails = allItems.map(item => {
+				const cat = catalogData[item.assetId] || {};
+				const isOffsale = !cat.isForSale;
+				return {
+					assetId: item.assetId,
+					name: item.name,
+					rap: item.recentAveragePrice || 0,
+					originalPrice: cat.originalPrice || 0,
+					isOffsale: isOffsale,
+					serialNumber: item.serialNumber || null,
+					imageUrl: thumbnails[item.assetId] || ""
+				};
+			});
 
 			return res.status(200).json({ userId, limitedCount: allItems.length, rap: totalRap, private: false, items: itemDetails });
 		}
