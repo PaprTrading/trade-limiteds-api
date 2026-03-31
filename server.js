@@ -147,11 +147,29 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 			rapHistory = (r.priceDataPoints || []).map(p => ({
 				price: p.value,
 				date: p.date,
-				// Also send as unix timestamp for reliable filtering
 				ts: new Date(p.date).getTime()
 			})).reverse(); // oldest first = left to right on chart
+
 			if (r.originalPrice && !details.originalPrice) {
 				details.originalPrice = r.originalPrice;
+			}
+
+			// Append today's current RAP as the most recent data point
+			// so the chart always ends at today (2026)
+			const currentRap = details.rap || r.recentAveragePrice || 0;
+			if (currentRap > 0) {
+				const todayTs = Date.now();
+				const todayDate = new Date(todayTs).toISOString();
+				// Only append if the last point isn't already recent (within 3 days)
+				const lastPoint = rapHistory[rapHistory.length - 1];
+				const threeDaysMs = 3 * 86400 * 1000;
+				if (!lastPoint || (todayTs - (lastPoint.ts || 0)) > threeDaysMs) {
+					rapHistory.push({
+						price: currentRap,
+						date: todayDate,
+						ts: todayTs
+					});
+				}
 			}
 		}
 
