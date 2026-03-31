@@ -87,7 +87,7 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 	if (!assetId || isNaN(assetId)) return res.status(400).json({ error: "Invalid assetId" });
 
 	try {
-		const [detailsRes, rapRes, thumbRes] = await Promise.all([
+		const [detailsRes, rapRes, thumbRes, assetRes] = await Promise.all([
 			fetch("https://catalog.roblox.com/v1/catalog/items/details", {
 				method: "POST",
 				headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -97,6 +97,9 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 				headers: { "Accept": "application/json" }
 			}),
 			fetch(`https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false`, {
+				headers: { "Accept": "application/json" }
+			}),
+			fetch(`https://economy.roblox.com/v2/assets/${assetId}/details`, {
 				headers: { "Accept": "application/json" }
 			})
 		]);
@@ -114,15 +117,39 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 				originalPrice: asset.price || asset.lowestPrice || 0,
 				rap: asset.recentAveragePrice || 0,
 				creator: asset.creatorName || "Roblox",
+				created: "",
 			};
+		}
+
+		// Asset details gives us creation date and better original price
+		if (assetRes.ok) {
+			try {
+				const a = await assetRes.json();
+				if (a.Created || a.created) {
+					const rawDate = a.Created || a.created;
+					// Format: 2013-08-31T00:00:00.000Z -> Aug 31, 2013
+					const dt = new Date(rawDate);
+					const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+					details.created = `${months[dt.getUTCMonth()]} ${dt.getUTCDate()}, ${dt.getUTCFullYear()}`;
+				}
+				if ((a.PriceInRobux || a.priceInRobux) && !details.originalPrice) {
+					details.originalPrice = a.PriceInRobux || a.priceInRobux;
+				}
+				if (!details.description && (a.Description || a.description)) {
+					details.description = a.Description || a.description;
+				}
+			} catch(e) {}
 		}
 
 		if (rapRes.ok) {
 			const r = await rapRes.json();
+			// Send ALL data points with timestamp so client can filter properly
 			rapHistory = (r.priceDataPoints || []).map(p => ({
 				price: p.value,
-				date: p.date
-			})).reverse();  // Roblox returns newest first — reverse for left=old right=new
+				date: p.date,
+				// Also send as unix timestamp for reliable filtering
+				ts: new Date(p.date).getTime()
+			})).reverse(); // oldest first = left to right on chart
 			if (r.originalPrice && !details.originalPrice) {
 				details.originalPrice = r.originalPrice;
 			}
