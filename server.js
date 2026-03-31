@@ -39,7 +39,6 @@ app.get("/inventory/:userId", async (req, res) => {
 		if (full) {
 			const assetIds = allItems.map(i => i.assetId).filter(Boolean);
 			const thumbnails = {};
-			const saleStatus = {};
 
 			// Batch thumbnails
 			for (let i = 0; i < assetIds.length; i += 100) {
@@ -56,47 +55,12 @@ app.get("/inventory/:userId", async (req, res) => {
 				} catch (e) {}
 			}
 
-			// Fetch sale status via catalog/items/details POST
-			for (let i = 0; i < assetIds.length; i += 120) {
-				const batch = assetIds.slice(i, i + 120);
-				try {
-					const r = await fetch("https://catalog.roblox.com/v1/catalog/items/details", {
-						method: "POST",
-						headers: { "Content-Type": "application/json", "Accept": "application/json" },
-						body: JSON.stringify({
-							items: batch.map(id => ({ itemType: "Asset", id: Number(id) }))
-						})
-					});
-					if (r.ok) {
-						const d = await r.json();
-						for (const asset of (d.data || [])) {
-							const statusArr = asset.itemStatus || [];
-							const priceStatus = asset.priceStatus || "";
-							const isOffsale =
-								statusArr.includes("Offsale") ||
-								priceStatus === "Off Sale" ||
-								priceStatus === "No Resellers" ||
-								(!asset.price && !asset.lowestPrice && !asset.unitsAvailableForConsumption);
-
-							saleStatus[asset.id] = {
-								isOffsale,
-								originalPrice: asset.price || asset.lowestPrice || 0,
-								description: asset.description || "",
-							};
-						}
-					}
-				} catch (e) {}
-			}
-
+			// Items returned - no extra catalog calls needed
 			const itemDetails = allItems.map(item => {
-				const s = saleStatus[item.assetId] || {};
 				return {
 					assetId: item.assetId,
 					name: item.name,
 					rap: item.recentAveragePrice || 0,
-					originalPrice: s.originalPrice || 0,
-					isOffsale: s.isOffsale || false,
-					description: s.description || "",
 					serialNumber: item.serialNumber || null,
 					imageUrl: thumbnails[item.assetId] || ""
 				};
@@ -149,7 +113,6 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 				description: asset.description || "",
 				originalPrice: asset.price || asset.lowestPrice || 0,
 				rap: asset.recentAveragePrice || 0,
-				isOffsale: (asset.itemStatus || []).includes("Offsale") || asset.priceStatus === "Off Sale",
 				creator: asset.creatorName || "Roblox",
 			};
 		}
