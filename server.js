@@ -122,7 +122,7 @@ app.get("/itemdetails/:assetId", async (req, res) => {
 			rapHistory = (r.priceDataPoints || []).map(p => ({
 				price: p.value,
 				date: p.date
-			}));
+			})).reverse();  // Roblox returns newest first — reverse for left=old right=new
 			if (r.originalPrice && !details.originalPrice) {
 				details.originalPrice = r.originalPrice;
 			}
